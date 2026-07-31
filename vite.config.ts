@@ -37,6 +37,13 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: true,
+    proxy: {
+      // Forwards to the backend proxy in server/index.js (run via `npm run server`).
+      '/api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port: 5174,

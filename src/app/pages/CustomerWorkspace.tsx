@@ -16,9 +16,16 @@ import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { toast } from 'sonner';
 import AppLayout from '../components/AppLayout';
+import { getCustomerProfileByCode } from '../../controller/customerProfileController';
+import { generateEmailDraft } from '../../controller/emailDraftController';
+import { approveSendEmail } from '../../controller/emailApprovalController';
+import { getMailAccessToken } from '../../auth/dataverseAuth';
+import { updateReminderDraft } from '../../controller/reminderHistoryController';
 
 // Mock customer data
-const mockCustomers = [
+// Kept as reference — this page now fetches live data via getCustomerProfileByCode()
+// below. Not deleted, just inactive.
+/* const mockCustomers = [
   {
     id: 'CUST-001',
     name: 'Acme Corporation',
@@ -87,7 +94,7 @@ const mockCustomers = [
       { date: '2024-07-05', type: 'Call', subject: 'Payment discussion', status: 'Completed' },
     ]
   }
-];
+]; */
 
 const CustomerWorkspace: React.FC = () => {
   const { customerId } = useParams();
@@ -98,6 +105,11 @@ const CustomerWorkspace: React.FC = () => {
   const [isAIThinking, setIsAIThinking] = useState(false);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
+  const [reminderHistoryId, setReminderHistoryId] = useState<string | null>(null);
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [approvalStatus, setApprovalStatus] = useState<'pending' | 'approved'>('pending');
+  const [isEmailSent, setIsEmailSent] = useState(false);
   const [emailTone, setEmailTone] = useState('professional');
   const [timeline, setTimeline] = useState<any[]>([]);
   const [showApprovalFlow, setShowApprovalFlow] = useState(false);
@@ -105,13 +117,26 @@ const CustomerWorkspace: React.FC = () => {
   const [isGeneratingEmail, setIsGeneratingEmail] = useState(false);
 
   useEffect(() => {
-    // Find customer by ID
-    const foundCustomer = mockCustomers.find(c => c.id === customerId);
-    if (foundCustomer) {
+    if (!customerId) return;
+    let cancelled = false;
+
+    // Fetch customer by customer code (cca_customercode) from Dataverse
+    setEmailSubject('');
+    setEmailBody('');
+    setReminderHistoryId(null);
+    setApprovalStatus('pending');
+    setIsEmailSent(false);
+
+    getCustomerProfileByCode(customerId).then((foundCustomer) => {
+      if (cancelled || !foundCustomer) return;
       setCustomer(foundCustomer);
       addTimelineEvent('Customer Selected', 'User navigated to customer workspace', 'info');
       addTimelineEvent('Risk Analysis Completed', `Risk Score: ${foundCustomer.riskScore} - ${foundCustomer.priority} Priority`, 'warning');
-    }
+    }).catch((err) => {
+      console.error('[CustomerWorkspace] Failed to load customer profile:', err);
+    });
+
+    return () => { cancelled = true; };
   }, [customerId]);
 
   const addTimelineEvent = (title: string, description: string, type: 'info' | 'success' | 'warning' | 'error') => {
@@ -244,42 +269,85 @@ const CustomerWorkspace: React.FC = () => {
     setShowApprovalFlow(true);
     addTimelineEvent('Approval Requested', 'Email sent for manager approval', 'info');
 
-    // Simulate approval flow
-    setTimeout(() => {
+    setTimeout(async () => {
       addTimelineEvent('Manager Approved', 'Email approved by Sarah Johnson', 'success');
+      setApprovalStatus('approved');
+
+      try {
+        const accessToken = await getMailAccessToken();
+        // Not verifying/inspecting the token — passed straight through to the flow.
+        await approveSendEmail({
+          RId: reminderHistoryId ?? '',
+          accessToken,
+          sendTo: customer?.email,
+        });
+
+        setIsEmailSent(true);
+        addTimelineEvent('Reminder Email Sent', `Email sent to ${customer?.email}`, 'success');
+        toast.success('Reminder email sent successfully!');
+
+        setTimeout(() => {
+          addTimelineEvent('Dataverse Updated', 'Customer record and activity log synchronized', 'success');
+          toast.success('Dataverse updated successfully!');
+          setShowApprovalFlow(false);
+        }, 1500);
+      } catch (err) {
+        console.error('[CustomerWorkspace] Failed to approve and send email:', err);
+        addTimelineEvent('Send Failed', 'Could not send the reminder email. Please try again.', 'error');
+        toast.error('Failed to send reminder email.');
+        setShowApprovalFlow(false);
+      }
     }, 1500);
-
-    setTimeout(() => {
-      addTimelineEvent('Reminder Email Sent', `Email sent to ${customer?.email}`, 'success');
-      toast.success('Reminder email sent successfully!');
-    }, 3000);
-
-    setTimeout(() => {
-      addTimelineEvent('Outlook Notification', 'Email delivered and read receipt received', 'success');
-    }, 4000);
-
-    setTimeout(() => {
-      addTimelineEvent('Dataverse Updated', 'Customer record and activity log synchronized', 'success');
-      toast.success('Dataverse updated successfully!');
-      setShowApprovalFlow(false);
-    }, 5500);
   };
 
   const handleGenerateEmail = async () => {
+    if (!customer?.aid) return;
     setIsGeneratingEmail(true);
-    
-    // Simulate AI email generation
-    setTimeout(() => {
-      const subject = `Important: Outstanding Payment Reminder - ${customer?.overdueInvoices} Overdue Invoices`;
-      const body = `Dear Accounts Payable Team,\n\nI hope this message finds you well. I'm reaching out regarding ${customer?.overdueInvoices} overdue invoices totaling $${customer?.overdueAmount.toLocaleString()} for ${customer?.name}.\n\nOverdue Invoices:\n${customer?.invoices.filter((inv: any) => inv.status === 'Overdue').map((inv: any) => `• ${inv.id}: $${inv.amount.toLocaleString()} (${inv.daysOverdue} days overdue)`).join('\n')}\n\nWe value our partnership and want to work with you to resolve this matter. Please contact me at your earliest convenience to discuss payment arrangements.\n\nBest regards,\n${customer?.owner}\nCollection Specialist`;
-      
-      setEmailSubject(subject);
-      setEmailBody(body);
-      setIsGeneratingEmail(false);
-      
+
+    try {
+      const draft = await generateEmailDraft(customer.aid);
+      setEmailSubject(draft.subject);
+      setEmailBody(draft.body);
+      setReminderHistoryId(draft.RHId);
+
       addTimelineEvent('Email Draft Generated', 'AI-generated email ready for review', 'success');
       toast.success('Email draft generated successfully!');
-    }, 2000);
+    } catch (err) {
+      console.error('[CustomerWorkspace] Failed to generate email draft:', err);
+      toast.error('Failed to generate email draft. Please try again.');
+    } finally {
+      setIsGeneratingEmail(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    if (!reminderHistoryId) {
+      toast.error('No draft to save yet — generate an email first.');
+      return;
+    }
+
+    setIsSavingDraft(true);
+    try {
+      await updateReminderDraft(reminderHistoryId, emailSubject, emailBody);
+      setIsEditingEmail(false);
+      addTimelineEvent('Email Draft Updated', 'Draft subject and body saved', 'success');
+      toast.success('Draft saved successfully!');
+    } catch (err) {
+      console.error('[CustomerWorkspace] Failed to save email draft:', err);
+      toast.error('Failed to save draft. Please try again.');
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
+
+  const handleDecline = () => {
+    setEmailSubject('');
+    setEmailBody('');
+    setReminderHistoryId(null);
+    setApprovalStatus('pending');
+    setIsEmailSent(false);
+    addTimelineEvent('Email Draft Declined', 'Draft discarded — ready to generate a new one', 'info');
+    toast.info('Draft declined.');
   };
 
   if (!customer) {
@@ -512,24 +580,29 @@ const CustomerWorkspace: React.FC = () => {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left text-xs font-semibold text-gray-600 pb-3">Invoice ID</th>
-                        <th className="text-right text-xs font-semibold text-gray-600 pb-3">Amount</th>
-                        <th className="text-left text-xs font-semibold text-gray-600 pb-3">Due Date</th>
-                        <th className="text-left text-xs font-semibold text-gray-600 pb-3">Status</th>
+                        <th className="text-left text-xs font-semibold text-gray-600 pb-3 pr-4">Invoice ID</th>
+                        <th className="text-right text-xs font-semibold text-gray-600 pb-3 pr-6">Amount</th>
+                        <th className="text-left text-xs font-semibold text-gray-600 pb-3 pr-4">Due Date</th>
+                        <th className="text-left text-xs font-semibold text-gray-600 pb-3 pr-4">Status</th>
                         <th className="text-right text-xs font-semibold text-gray-600 pb-3">Days Overdue</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {customer.invoices.map((invoice: any, index: number) => (
+                      {customer.invoices
+                        .filter((invoice: any) => ['Overdue', 'Partial', 'Pending'].includes(invoice.status))
+                        .map((invoice: any, index: number) => (
                         <tr key={index} className="border-b border-gray-100">
-                          <td className="py-3 text-sm font-medium text-gray-900">{invoice.id}</td>
-                          <td className="py-3 text-sm font-semibold text-right text-gray-900">
+                          <td className="py-3 pr-4 text-sm font-medium text-gray-900">{invoice.id}</td>
+                          <td className="py-3 pr-6 text-sm font-semibold text-right text-gray-900">
                             ${invoice.amount.toLocaleString()}
                           </td>
-                          <td className="py-3 text-sm text-gray-600">{invoice.dueDate}</td>
-                          <td className="py-3">
-                            <Badge variant={invoice.status === 'Overdue' ? 'destructive' : 'secondary'}>
-                              {invoice.status}
+                          <td className="py-3 pr-4 text-sm text-gray-600">{invoice.dueDate?.split('T')[0]}</td>
+                          <td className="py-3 pr-4">
+                            <Badge
+                              variant={invoice.status === 'Overdue' ? 'destructive' : 'secondary'}
+                              className={invoice.status === 'Partial' ? 'bg-orange-100 text-orange-700 border-orange-200' : ''}
+                            >
+                              {invoice.status === 'Pending' ? 'Due Soon' : invoice.status}
                             </Badge>
                           </td>
                           <td className="py-3 text-sm font-semibold text-right text-red-600">
@@ -549,21 +622,19 @@ const CustomerWorkspace: React.FC = () => {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left text-xs font-semibold text-gray-600 pb-3">Date</th>
-                        <th className="text-right text-xs font-semibold text-gray-600 pb-3">Amount</th>
-                        <th className="text-left text-xs font-semibold text-gray-600 pb-3">Invoice</th>
-                        <th className="text-right text-xs font-semibold text-gray-600 pb-3">Payment Days</th>
+                        <th className="w-1/3 text-left text-xs font-semibold text-gray-600 pb-3 px-2">Date</th>
+                        <th className="w-1/3 text-right text-xs font-semibold text-gray-600 pb-3 px-2">Amount</th>
+                        <th className="w-1/3 text-left text-xs font-semibold text-gray-600 pb-3 px-2">Invoice</th>
                       </tr>
                     </thead>
                     <tbody>
                       {customer.paymentHistory.map((payment: any, index: number) => (
                         <tr key={index} className="border-b border-gray-100">
-                          <td className="py-3 text-sm text-gray-600">{payment.date}</td>
-                          <td className="py-3 text-sm font-semibold text-right text-gray-900">
+                          <td className="w-1/3 py-3 px-2 text-sm text-gray-600">{payment.date?.split('T')[0]}</td>
+                          <td className="w-1/3 py-3 px-2 text-sm font-semibold text-right text-gray-900">
                             ${payment.amount.toLocaleString()}
                           </td>
-                          <td className="py-3 text-sm font-medium text-gray-900">{payment.invoice}</td>
-                          <td className="py-3 text-sm text-right text-gray-600">{payment.days} days</td>
+                          <td className="w-1/3 py-3 px-2 text-sm font-medium text-gray-900">{payment.invoice}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -621,16 +692,33 @@ const CustomerWorkspace: React.FC = () => {
                         <label className="text-sm font-semibold text-gray-700 mb-2 block">
                           Subject: Re: Urgent: BGP Route Hijack Causing Widespread Outages – Immediate Action Required
                         </label>
-                        <div className="text-sm text-gray-600 bg-gray-50 px-4 py-3 rounded-lg border border-gray-200">
-                          {emailSubject}
-                        </div>
+                        {isEditingEmail ? (
+                          <input
+                            type="text"
+                            className="w-full text-sm text-gray-800 bg-white px-4 py-3 rounded-lg border border-[#003087] focus:outline-none focus:ring-1 focus:ring-[#003087]"
+                            value={emailSubject}
+                            onChange={(e) => setEmailSubject(e.target.value)}
+                          />
+                        ) : (
+                          <div className="text-sm text-gray-600 bg-gray-50 px-4 py-3 rounded-lg border border-gray-200">
+                            {emailSubject}
+                          </div>
+                        )}
                       </div>
 
                       {/* Email Body */}
                       <div className="mb-6">
-                        <div className="bg-white border border-gray-200 rounded-lg p-6 text-sm text-gray-800 leading-relaxed whitespace-pre-line">
-                          {emailBody}
-                        </div>
+                        {isEditingEmail ? (
+                          <Textarea
+                            className="w-full min-h-[240px] bg-white border border-[#003087] rounded-lg p-6 text-sm text-gray-800 leading-relaxed focus:outline-none focus:ring-1 focus:ring-[#003087]"
+                            value={emailBody}
+                            onChange={(e) => setEmailBody(e.target.value)}
+                          />
+                        ) : (
+                          <div className="bg-white border border-gray-200 rounded-lg p-6 text-sm text-gray-800 leading-relaxed whitespace-pre-line">
+                            {emailBody}
+                          </div>
+                        )}
                       </div>
 
                       {/* Action Buttons */}
@@ -638,7 +726,7 @@ const CustomerWorkspace: React.FC = () => {
                         <Button 
                           className="flex-1 bg-[#0078D4] hover:bg-[#106EBE] text-white py-6 text-base font-semibold"
                           onClick={handleApproveAndSend}
-                          disabled={showApprovalFlow}
+                          disabled={showApprovalFlow || isEditingEmail}
                         >
                           {showApprovalFlow ? (
                             <>
@@ -651,24 +739,71 @@ const CustomerWorkspace: React.FC = () => {
                             </>
                           )}
                         </Button>
-                        <Button 
-                          variant="outline" 
+                        <Button
+                          variant="outline"
                           className="flex-1 border-2 border-red-500 text-red-600 hover:bg-red-50 py-6 text-base font-semibold"
+                          onClick={handleDecline}
+                          disabled={isEditingEmail}
                         >
-                          Escalate to Team
+                          Decline
                         </Button>
                       </div>
 
                       {/* Edit and Regenerate Options */}
                       <div className="flex gap-3 mt-3">
-                        <Button variant="ghost" size="sm" className="text-gray-600 hover:text-gray-900">
-                          <FileText className="w-4 h-4 mr-2" />
-                          Edit Draft
-                        </Button>
-                        <Button variant="ghost" size="sm" className="text-gray-600 hover:text-gray-900">
-                          <Sparkles className="w-4 h-4 mr-2" />
-                          Regenerate
-                        </Button>
+                        {isEditingEmail ? (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-gray-600 hover:text-gray-900"
+                              onClick={() => setIsEditingEmail(false)}
+                              disabled={isSavingDraft}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-green-700 hover:text-green-800"
+                              onClick={handleSaveDraft}
+                              disabled={isSavingDraft}
+                            >
+                              {isSavingDraft ? (
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              ) : (
+                                <FileText className="w-4 h-4 mr-2" />
+                              )}
+                              Save Draft
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-gray-600 hover:text-gray-900"
+                              onClick={() => setIsEditingEmail(true)}
+                            >
+                              <FileText className="w-4 h-4 mr-2" />
+                              Edit Draft
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-gray-600 hover:text-gray-900"
+                              onClick={handleGenerateEmail}
+                              disabled={isGeneratingEmail}
+                            >
+                              {isGeneratingEmail ? (
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              ) : (
+                                <Sparkles className="w-4 h-4 mr-2" />
+                              )}
+                              Regenerate
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </motion.div>
@@ -715,10 +850,6 @@ const CustomerWorkspace: React.FC = () => {
                 <div>
                   <div className="text-2xl font-bold text-gray-900 mb-1">3 Monthly Installments</div>
                   <div className="text-sm text-gray-600">AI-Optimized Plan</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xs text-gray-600 mb-1">Success Probability</div>
-                  <div className="text-2xl font-bold text-green-600">91%</div>
                 </div>
               </div>
 
@@ -847,43 +978,62 @@ const CustomerWorkspace: React.FC = () => {
                 </div>
 
                 {/* Reminder Generated */}
-                <div className="flex items-start gap-3">
-                  <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-full bg-[#003087] flex items-center justify-center">
-                      <CheckCircle className="w-4 h-4 text-white" />
+                {(() => {
+                  const reminderGenerated = Boolean(emailSubject && emailBody);
+                  return (
+                    <div className="flex items-start gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className={`w-8 h-8 rounded-full bg-[#003087] flex items-center justify-center ${reminderGenerated ? '' : 'opacity-40'}`}>
+                          <CheckCircle className="w-4 h-4 text-white" />
+                        </div>
+                        <div className="w-0.5 h-8 bg-gray-300 mt-1"></div>
+                      </div>
+                      <div className="flex-1 pt-1">
+                        <div className="flex items-center justify-between mb-1">
+                          <h4 className="text-sm font-semibold text-gray-900">Reminder Generated</h4>
+                          {reminderGenerated ? (
+                            <Badge className="bg-blue-100 text-blue-700 border-blue-200">Generated</Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-gray-50 text-gray-600 border-gray-300">Pending</Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-600">Payment reminder email drafted by AI</p>
+                      </div>
                     </div>
-                    <div className="w-0.5 h-8 bg-gray-300 mt-1"></div>
-                  </div>
-                  <div className="flex-1 pt-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <h4 className="text-sm font-semibold text-gray-900">Reminder Generated</h4>
-                      <Badge className="bg-blue-100 text-blue-700 border-blue-200">Generated</Badge>
-                    </div>
-                    <p className="text-xs text-gray-600">Payment reminder email drafted by AI</p>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 {/* Approval */}
                 <div className="flex items-start gap-3">
                   <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-full bg-[#003087] flex items-center justify-center animate-pulse">
-                      <Clock className="w-4 h-4 text-white" />
+                    <div className={`w-8 h-8 rounded-full bg-[#003087] flex items-center justify-center ${approvalStatus === 'pending' ? 'animate-pulse' : ''}`}>
+                      {approvalStatus === 'approved' ? (
+                        <CheckCircle className="w-4 h-4 text-white" />
+                      ) : (
+                        <Clock className="w-4 h-4 text-white" />
+                      )}
                     </div>
                     <div className="w-0.5 h-8 bg-gray-300 mt-1"></div>
                   </div>
                   <div className="flex-1 pt-1">
                     <div className="flex items-center justify-between mb-1">
                       <h4 className="text-sm font-semibold text-gray-900">Approval</h4>
-                      <Badge className="bg-yellow-100 text-yellow-700 border-yellow-200">Pending</Badge>
+                      {approvalStatus === 'approved' ? (
+                        <Badge className="bg-green-100 text-green-700 border-green-200">Approved</Badge>
+                      ) : (
+                        <Badge className="bg-yellow-100 text-yellow-700 border-yellow-200">Pending</Badge>
+                      )}
                     </div>
-                    <p className="text-xs text-gray-600">Awaiting manager approval</p>
+                    <p className="text-xs text-gray-600">
+                      {approvalStatus === 'approved' ? 'Approved by manager' : 'Awaiting manager approval'}
+                    </p>
                   </div>
                 </div>
 
                 {/* Email */}
                 <div className="flex items-start gap-3">
                   <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-full bg-[#003087] flex items-center justify-center opacity-40">
+                    <div className={`w-8 h-8 rounded-full bg-[#003087] flex items-center justify-center ${isEmailSent ? '' : 'opacity-40'}`}>
                       <MailIcon className="w-4 h-4 text-white" />
                     </div>
                     <div className="w-0.5 h-8 bg-gray-300 mt-1"></div>
@@ -891,9 +1041,15 @@ const CustomerWorkspace: React.FC = () => {
                   <div className="flex-1 pt-1">
                     <div className="flex items-center justify-between mb-1">
                       <h4 className="text-sm font-semibold text-gray-900">Email Delivery</h4>
-                      <Badge variant="outline" className="bg-gray-50 text-gray-600 border-gray-300">Not Sent</Badge>
+                      {isEmailSent ? (
+                        <Badge className="bg-green-100 text-green-700 border-green-200">Sent</Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-gray-50 text-gray-600 border-gray-300">Not Sent</Badge>
+                      )}
                     </div>
-                    <p className="text-xs text-gray-500">Waiting for approval</p>
+                    <p className="text-xs text-gray-500">
+                      {isEmailSent ? `Delivered to ${customer?.email}` : 'Waiting for approval'}
+                    </p>
                   </div>
                 </div>
 

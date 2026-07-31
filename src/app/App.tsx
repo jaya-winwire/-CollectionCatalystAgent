@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useMsal } from "@azure/msal-react";
+import { getDashboardCustomers, type DashboardCustomer } from "../controller/dashboardCustomersController";
 import WinWireLogo from "../components/WinWireLogo";
 import {
   LayoutDashboard, Users, FileText, Bot, Zap, CheckSquare, BarChart3,
@@ -72,7 +73,9 @@ const recentActivitiesData = [
 ];
 
 // Enhanced customer data with Dataverse fields
-const customersData = [
+// Kept as reference — Dashboard now fetches live data via getDashboardCustomers()
+// (see DashboardView below). Not deleted, just inactive.
+/* const customersData = [
   { 
     id: "CUST-001", 
     customer: "Acme Corporation", 
@@ -323,7 +326,7 @@ const customersData = [
     creditLimit: 600000,
     avgPaymentDays: 78
   },
-];
+]; */
 
 const invoicesData = [
   { id: "INV-2024-0891", customer: "Meridian Healthcare Group", initials: "MH", amount: 125000, dueDate: "Jun 15, 2024", daysOverdue: 35, riskScore: 78, priority: "High", status: "2nd Reminder", owner: "Sarah Chen", ownerInitials: "SC" },
@@ -363,11 +366,11 @@ const automationFlows = [
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "collections", label: "Collections", icon: Target, badge: 47 },
+  { id: "collections", label: "Collections", icon: Target },
   { id: "customers", label: "Customers", icon: Users },
   { id: "invoices", label: "Invoices", icon: FileText },
   { id: "ai-assistant", label: "AI Assistant", icon: Bot },
-  { id: "approvals", label: "Approvals", icon: CheckSquare, badge: 8 },
+  { id: "approvals", label: "Approvals", icon: CheckSquare },
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "settings", label: "Settings", icon: Settings },
 ];
@@ -389,23 +392,27 @@ function riskColor(s: number) {
 
 function priorityStyle(p: string) {
   const m: Record<string, { bg: string; text: string }> = {
+    Priority: { bg: "#fef2f2", text: "#dc2626" },
+    Watch: { bg: "#fff7ed", text: "#ea580c" },
+    Standard: { bg: "#eff6ff", text: "#1d4ed8" },
     Critical: { bg: "#fef2f2", text: "#dc2626" },
     High: { bg: "#fff7ed", text: "#ea580c" },
     Medium: { bg: "#fffbeb", text: "#d97706" },
     Low: { bg: "#f0fdf4", text: "#16a34a" },
   };
-  return m[p] ?? { bg: "#f3f4f6", text: "#6b7280" };
+  return m[p] ?? { bg: "#f0fdf4", text: "#16a34a" };
 }
 
 function statusStyle(s: string) {
   const m: Record<string, { bg: string; text: string }> = {
+    Active: { bg: "#f0fdf4", text: "#16a34a" },
     "Final Notice": { bg: "#fef2f2", text: "#dc2626" },
     Escalated: { bg: "#fdf4ff", text: "#9333ea" },
     "2nd Reminder": { bg: "#fff7ed", text: "#ea580c" },
     "1st Reminder": { bg: "#eff6ff", text: "#1d4ed8" },
     Paid: { bg: "#f0fdf4", text: "#16a34a" },
   };
-  return m[s] ?? { bg: "#f3f4f6", text: "#6b7280" };
+  return m[s] ?? { bg: "#fef2f2", text: "#dc2626" };
 }
 
 function getAvatarColor(index: number) {
@@ -647,6 +654,15 @@ function DashboardView({ setActiveNav }: { setActiveNav: (id: string) => void })
   const [filterPriority, setFilterPriority] = useState("All");
   const [filterOwner, setFilterOwner] = useState("All");
 
+  // Live customer data from Dataverse for the Customer Collection Worklist
+  // card (and the AI Risk Prioritization cards, which share this data).
+  const [customersData, setCustomersData] = useState<DashboardCustomer[]>([]);
+  useEffect(() => {
+    getDashboardCustomers()
+      .then(setCustomersData)
+      .catch((err) => console.error("[DashboardView] Failed to load customers:", err));
+  }, []);
+
   // Filter customers based on search and filters
   const filteredCustomers = customersData.filter((customer) => {
     const matchSearch = !searchCustomer || 
@@ -697,8 +713,8 @@ function DashboardView({ setActiveNav }: { setActiveNav: (id: string) => void })
           sub="vs. last month" 
         />
         <KPICard 
-          label="Overdue Customers" 
-          value="10" 
+          label="Overdue Customers"
+          value="4"
           change="+3" 
           positive={false} 
           icon={Users} 
@@ -706,8 +722,8 @@ function DashboardView({ setActiveNav }: { setActiveNav: (id: string) => void })
           sub="active cases" 
         />
         <KPICard 
-          label="High-Risk Customers" 
-          value="5" 
+          label="High-Risk Customers"
+          value="2"
           change="+1" 
           positive={false} 
           icon={AlertTriangle} 
@@ -960,9 +976,10 @@ function DashboardView({ setActiveNav }: { setActiveNav: (id: string) => void })
             onChange={(e) => setFilterPriority(e.target.value)}
           >
             <option value="All">All Priorities</option>
-            <option value="High">High Priority</option>
-            <option value="Medium">Medium Priority</option>
-            <option value="Low">Low Priority</option>
+            <option value="Priority">Priority</option>
+            <option value="Watch">Watch</option>
+            <option value="Standard">Standard</option>
+            <option value="Low">Low</option>
           </select>
 
           <select 

@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "server": "node --env-file=.env server/index.js",
+    "dev:all": "concurrently -n vite,server -c blue,green \"npm run dev\" \"npm run server\"",
+    "start": "node server/index.js"
   },
   "dependencies": {
     "@azure/msal-browser": "^3.30.0",
     "@azure/msal-react": "^2.2.0",
+    "express": "^4.21.2",
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.1",
     "@mui/icons-material": "7.3.5",
@@ -70,6 +74,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
+    "concurrently": "^9.1.2",
     "tailwindcss": "4.1.12",
     "vite": "6.3.5"
   },

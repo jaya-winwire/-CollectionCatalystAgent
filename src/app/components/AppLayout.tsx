@@ -18,11 +18,11 @@ const activities = [
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
-  { id: "collections", label: "Collections", icon: Target, badge: 47, path: "/collections" },
+  { id: "collections", label: "Collections", icon: Target, path: "/collections" },
   { id: "customers", label: "Customers", icon: Users, path: "/customers" },
   { id: "invoices", label: "Invoices", icon: FileText, path: "/invoices" },
   { id: "ai-assistant", label: "AI Assistant", icon: Bot, path: "/ai-assistant" },
-  { id: "approvals", label: "Approvals", icon: CheckSquare, badge: 8, path: "/approvals" },
+  { id: "approvals", label: "Approvals", icon: CheckSquare, path: "/approvals" },
   { id: "reports", label: "Reports", icon: BarChart3, path: "/reports" },
   { id: "settings", label: "Settings", icon: Settings, path: "/settings" },
 ];
